@@ -1,0 +1,78 @@
+name: Mirror sample-code to Gist
+
+### Workflow used to update the Gist used for code samples in developer.kiteworks.com every time the sample codes in this repo are updated.
+
+on:
+  push:
+    paths:
+      - 'sample-code/**'
+    branches:
+      - main
+
+jobs:
+  sync-to-gist:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Mirror sample-code to Gist (add/update only)
+        env:
+          GIST_ID: ff4744ea8665a67d797e36f85e5de726
+          GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: |
+          cat > sync_gist.py <<'PYCODE'
+          import os, requests, json
+
+          gist_id = os.environ["GIST_ID"]
+          token = os.environ["GITHUB_TOKEN"]
+          headers = {
+              "Authorization": f"token {token}",
+              "Accept": "application/vnd.github.v3+json"
+          }
+
+          gist_url = f"https://api.github.com/gists/{gist_id}"
+
+          # --- 1. Fetch current Gist state ---
+          resp = requests.get(gist_url, headers=headers)
+          if resp.status_code != 200:
+              print("❌ Failed to fetch Gist:", resp.status_code, resp.text)
+              exit(1)
+          gist_data = resp.json()
+
+          # --- 2. Collect local files ---
+          local_files = {}
+          for root, _, filenames in os.walk("sample-code"):
+              for f in filenames:
+                  if f == ".DS_Store":
+                      continue
+                  path = os.path.join(root, f)
+                  rel = os.path.relpath(path, "sample-code")
+
+                  # Replace / with __ because Gist files can't have folders
+                  gist_name = rel.replace("/", "__")
+
+                  with open(path, "r", encoding="utf-8") as fh:
+                      local_files[gist_name] = {"content": fh.read()}
+
+          # --- 3. Update only (no deletions) ---
+          data = {"files": local_files}
+          r = requests.patch(gist_url, headers=headers, data=json.dumps(data))
+          if r.status_code >= 300:
+              print("❌ Failed to update Gist:", r.status_code, r.text)
+              exit(1)
+
+          print(f"✅ Gist {gist_id} synced successfully (added/updated only).")
+          print(f"  → {len(local_files)} files uploaded.")
+          PYCODE
+
+          python3 sync_gist.py
